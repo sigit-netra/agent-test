@@ -278,8 +278,8 @@ auth:
 # TIME: hanya untuk info/status; sync/status bisa dihubungkan ke command di router kalau kamu mau.
 time:
   timezone: "Asia/Jakarta"
-  # Prioritas: pakai command yang memang berlaku di device kamu.
-  sync_cmd: ["/etc/init.d/sysntpd", "restart"]
+  # RUT906/RutOS ini memakai ntpd; kalau mau portable antar firmware, kosongkan sync_cmd.
+  sync_cmd: ["/etc/init.d/ntpd", "restart"]
   # status_cmd: ["sh","-lc","chronyc tracking"]
   auto_sync_enabled: true
   auto_sync_interval_sec: 900
@@ -372,13 +372,12 @@ ubus_calls:
     args: {}
 
 
-
 # Hitung parameter turunan water_table:
 # B = CL - WC - A, dengan WC diambil dari telemetry_key (WC_source_key)
 water_table:
   enabled: true
-  CL: 300.0
-  A: 91.5
+  CL: 246.3
+  A: 116.5
   WC_source_key: "water_level"
   telemetry_key: "water_table"
 
@@ -389,152 +388,92 @@ device_identity:
   inject_sources: ["telemetry"] # atau ["*"] kalau mau semua record outbox (inbox juga)
   imei_key: "ident"
   serial_key: "device_serial"
-  site_name: "Bintaro Jaya"
-  site_id: "JAYA-MENTENG-01"
-  device_name: "NSENSE-JAYA-MENTENG-01"
-  project: "Flow Monitoring"
-  region: "Banten - Tangerang Selatan"
-  note: "Dipasang didepan Bukit Menteng"
-  
+  site_name: "Site Gambut A"
+  site_id: "GMBT-A-001"
+  device_name: "RUT906-LOGGER-01"
+  project: "TMAT"
+  region: "Kalimantan Tengah"
+  note: "Kalibrasi awal 2026-01-17; patok referensi 0cm"
+
 modbus_sensors:
-  - name: "HRF600S"
+  - name: "HPT606"
     serial_device: "/dev/rs485"
     baud: 9600
     parity: "N"
     stop_bits: 1
-    slave_id: "d:128"
-    timeout_ms: 800
+    slave_id: "d:26"
+    timeout_ms: 1500
     reads:
-      # 0x0001 Flow velocity, unit m/s, raw / 1000
-      - key: "flow_velocity"
-        telemetry_key: "flow_velocity_ms"
+      - key: "water_pressure"
+        telemetry_key: "-"        # <--- saranku ubah ke "-" kalau memang tidak mau masuk telemetry
         kind: "input"
-        addr: "0x0001"
-        quantity: 1
-        datatype: "uint16"
-        scale: 0.001
+        addr: "0x003C"
+        quantity: 2
+        datatype: "float32be"
+        scale: 1
         offset: 0
 
-      # 0x0002 Water level, unit m, raw / 1000
       - key: "water_level"
-        telemetry_key: "water_level_m"
+        telemetry_key: "water_level"
         kind: "input"
-        addr: "0x0002"
-        quantity: 1
-        datatype: "uint16"
-        scale: 0.001
+        addr: "0x003E"
+        quantity: 2
+        datatype: "float32be"
+        scale: 100
         offset: 0
 
-      # 0x0003 Empty height, unit m, raw / 1000
-      - key: "empty_height"
-        telemetry_key: "empty_height_m"
-        kind: "input"
-        addr: "0x0003"
+  - name: "RK330-01"
+    serial_device: "/dev/rs485"
+    baud: 9600
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:27"
+    timeout_ms: 1500
+    reads:
+      - key: "temperature"
+        telemetry_key: "air_temp_c"
+        kind: "holding"
+        addr: "0x0000"
         quantity: 1
-        datatype: "uint16"
-        scale: 0.001
+        datatype: "int16"
+        scale: 0.1
         offset: 0
 
-      # 0x0004 Instantaneous flow, unit m3/s, raw / 1000
-      - key: "instantaneous_flow"
-        telemetry_key: "instantaneous_flow_m3s"
-        kind: "input"
-        addr: "0x0004"
-        quantity: 1
-        datatype: "uint16"
-        scale: 0.001
-        offset: 0
-
-      # 0x0005..0x0007 Cumulative flow
-      # Manual bilang ini gabungan 3 register 16-bit.
-      # Paling aman dibaca per-part dulu kalau parser belum support uint48.
-      - key: "cumulative_flow_hi"
-        telemetry_key: "cumulative_flow_hi_raw"
-        kind: "input"
-        addr: "0x0005"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "cumulative_flow_mid"
-        telemetry_key: "cumulative_flow_mid_raw"
-        kind: "input"
-        addr: "0x0006"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "cumulative_flow_lo"
-        telemetry_key: "cumulative_flow_lo_raw"
-        kind: "input"
-        addr: "0x0007"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      # 0x0008 Flow rate signal strength
-      - key: "flow_signal_strength"
-        telemetry_key: "flow_signal_strength"
-        kind: "input"
-        addr: "0x0008"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      # 0x0009 Water level signal strength
-      - key: "water_level_signal_strength"
-        telemetry_key: "water_level_signal_strength"
-        kind: "input"
-        addr: "0x0009"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      # 0x000A Flow direction: Reverse=0, Forward=1
-      - key: "flow_direction"
-        telemetry_key: "flow_direction"
-        kind: "input"
-        addr: "0x000A"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      # 0x0021 Accident details
-      - key: "accident_details"
-        telemetry_key: "accident_details"
-        kind: "input"
-        addr: "0x0021"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      # 0x0022 Vertical angle, enlarged 100 times => raw / 100
-      - key: "vertical_angle"
-        telemetry_key: "vertical_angle_deg"
-        kind: "input"
-        addr: "0x0022"
-        quantity: 1
-        datatype: "uint16"
-        scale: 0.01
-        offset: 0
-
-      # 0x0023 Input voltage, enlarged 10 times => raw / 10
-      - key: "input_voltage"
-        telemetry_key: "input_voltage_v"
-        kind: "input"
-        addr: "0x0023"
+      - key: "humidity"
+        telemetry_key: "air_rh_percent"
+        kind: "holding"
+        addr: "0x0001"
         quantity: 1
         datatype: "uint16"
         scale: 0.1
         offset: 0
 
+      - key: "pressure"
+        telemetry_key: "air_pressure_mbar"
+        kind: "holding"
+        addr: "0x0002"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.1
+        offset: 0
+
+  - name: "RK400-01"
+    serial_device: "/dev/rs485"
+    baud: 9600
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:28"
+    timeout_ms: 1500
+    reads:
+      - key: "rainfall"
+        telemetry_key: "rain_mm"
+        kind: "holding"
+        addr: "0x0000"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.2
+        offset: 0
+        
   - name: "epever"
     serial_device: "/dev/rs485"
     baud: 115200
@@ -639,313 +578,4 @@ modbus_sensors:
         quantity: 1
         datatype: "uint16"
         scale: 0.01
-        offset: 0
-
-  - name: "ZILAI_LDFM01"
-    serial_device: "/dev/rs485"
-    baud: 115200
-    parity: "N"
-    stop_bits: 1
-    slave_id: "d:101"
-    timeout_ms: 1500
-    reads:
-      # ZILAI flow meter realtime map memakai HOLDING register / FC03.
-      # Telemetry key diprefix zilai_ supaya tidak bentrok dengan HPT606.
-      - key: "air_height"
-        telemetry_key: "zilai_air_height_mm"
-        kind: "holding"
-        addr: "0x0001"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "zilai_water_level"
-        telemetry_key: "zilai_water_level_mm"
-        kind: "holding"
-        addr: "0x0003"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "ranging_signal_strength"
-        telemetry_key: "zilai_level_signal_strength"
-        kind: "holding"
-        addr: "0x0004"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "mounting_height"
-        telemetry_key: "zilai_mounting_height_cm"
-        kind: "holding"
-        addr: "0x0005"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "roll_angle"
-        telemetry_key: "zilai_roll_angle_deg"
-        kind: "holding"
-        addr: "0x0009"
-        quantity: 1
-        datatype: "int16"
-        scale: 0.1
-        offset: 0
-
-      - key: "pitch_angle"
-        telemetry_key: "zilai_pitch_angle_deg"
-        kind: "holding"
-        addr: "0x000A"
-        quantity: 1
-        datatype: "int16"
-        scale: 0.1
-        offset: 0
-
-      - key: "zilai_flow_direction"
-        telemetry_key: "zilai_flow_direction_raw"
-        kind: "holding"
-        addr: "0x000C"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "surface_flow_velocity"
-        telemetry_key: "zilai_surface_flow_velocity_ms"
-        kind: "holding"
-        addr: "0x000F"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "instantaneous_flow_rate"
-        telemetry_key: "zilai_instantaneous_flow_m3s"
-        kind: "holding"
-        addr: "0x0011"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "positive_cumulative_flow"
-        telemetry_key: "zilai_positive_cumulative_m3"
-        kind: "holding"
-        addr: "0x0013"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "negative_cumulative_flow"
-        telemetry_key: "zilai_negative_cumulative_m3"
-        kind: "holding"
-        addr: "0x0015"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "overwater_area"
-        telemetry_key: "zilai_overwater_area_m2"
-        kind: "holding"
-        addr: "0x0017"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "silt_thickness"
-        telemetry_key: "zilai_silt_thickness_mm"
-        kind: "holding"
-        addr: "0x0019"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "filtered_speed_value"
-        telemetry_key: "zilai_filtered_speed_value_ms"
-        kind: "holding"
-        addr: "0x01F4"
-        quantity: 2
-        datatype: "int32be"
-        scale: 0.001
-        offset: 0
-
-      - key: "raw_speed_value"
-        telemetry_key: "zilai_raw_speed_value_ms"
-        kind: "holding"
-        addr: "0x01F6"
-        quantity: 2
-        datatype: "int32be"
-        scale: 0.001
-        offset: 0
-
-      - key: "speed_signal_strength"
-        telemetry_key: "zilai_speed_signal_strength"
-        kind: "holding"
-        addr: "0x01F9"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-
-  - name: "ZILAI_LDFM01-2"
-    serial_device: "/dev/rs485"
-    baud: 115200
-    parity: "N"
-    stop_bits: 1
-    slave_id: "d:102"
-    timeout_ms: 1500
-    reads:
-      # ZILAI flow meter realtime map memakai HOLDING register / FC03.
-      # Slave 102 dipisah dengan suffix/prefix khusus agar tidak bentrok dengan slave 101.
-      - key: "air_height_102"
-        telemetry_key: "zilai_102_air_height_mm"
-        kind: "holding"
-        addr: "0x0001"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "water_level_102"
-        telemetry_key: "zilai_102_water_level_mm"
-        kind: "holding"
-        addr: "0x0003"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "ranging_signal_strength_102"
-        telemetry_key: "zilai_102_level_signal_strength"
-        kind: "holding"
-        addr: "0x0004"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "mounting_height_102"
-        telemetry_key: "zilai_102_mounting_height_cm"
-        kind: "holding"
-        addr: "0x0005"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "roll_angle_102"
-        telemetry_key: "zilai_102_roll_angle_deg"
-        kind: "holding"
-        addr: "0x0009"
-        quantity: 1
-        datatype: "int16"
-        scale: 0.1
-        offset: 0
-
-      - key: "pitch_angle_102"
-        telemetry_key: "zilai_102_pitch_angle_deg"
-        kind: "holding"
-        addr: "0x000A"
-        quantity: 1
-        datatype: "int16"
-        scale: 0.1
-        offset: 0
-
-      - key: "flow_direction_102"
-        telemetry_key: "zilai_102_flow_direction_raw"
-        kind: "holding"
-        addr: "0x000C"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
-        offset: 0
-
-      - key: "surface_flow_velocity_102"
-        telemetry_key: "zilai_102_surface_flow_velocity_ms"
-        kind: "holding"
-        addr: "0x000F"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "instantaneous_flow_rate_102"
-        telemetry_key: "zilai_102_instantaneous_flow_m3s"
-        kind: "holding"
-        addr: "0x0011"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "positive_cumulative_flow_102"
-        telemetry_key: "zilai_102_positive_cumulative_m3"
-        kind: "holding"
-        addr: "0x0013"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "negative_cumulative_flow_102"
-        telemetry_key: "zilai_102_negative_cumulative_m3"
-        kind: "holding"
-        addr: "0x0015"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "overwater_area_102"
-        telemetry_key: "zilai_102_overwater_area_m2"
-        kind: "holding"
-        addr: "0x0017"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "silt_thickness_102"
-        telemetry_key: "zilai_102_silt_thickness_mm"
-        kind: "holding"
-        addr: "0x0019"
-        quantity: 2
-        datatype: "float32_dcba"
-        scale: 1
-        offset: 0
-
-      - key: "filtered_speed_value_102"
-        telemetry_key: "zilai_102_filtered_speed_value_ms"
-        kind: "holding"
-        addr: "0x01F4"
-        quantity: 2
-        datatype: "int32be"
-        scale: 0.001
-        offset: 0
-
-      - key: "raw_speed_value_102"
-        telemetry_key: "zilai_102_raw_speed_value_ms"
-        kind: "holding"
-        addr: "0x01F6"
-        quantity: 2
-        datatype: "int32be"
-        scale: 0.001
-        offset: 0
-
-      - key: "speed_signal_strength_102"
-        telemetry_key: "zilai_102_speed_signal_strength"
-        kind: "holding"
-        addr: "0x01F9"
-        quantity: 1
-        datatype: "uint16"
-        scale: 1
         offset: 0

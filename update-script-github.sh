@@ -31,158 +31,6 @@ backup_path() {
   mv "$src" "$dst"
 }
 
-find_section_start_line() {
-  key="$1"
-  input_file="$2"
-
-  awk -v key="$key" '
-    {
-      lines[NR] = $0
-    }
-    END {
-      key_line = 0
-      for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ "^" key ":") {
-          key_line = i
-          break
-        }
-      }
-
-      if (key_line == 0) {
-        exit 1
-      }
-
-      start_line = key_line
-      while (start_line > 1) {
-        prev_line = lines[start_line - 1]
-        if (prev_line ~ /^#/ || prev_line ~ /^$/) {
-          start_line--
-        } else {
-          break
-        }
-      }
-
-      print start_line
-    }
-  ' "$input_file"
-}
-
-find_key_line() {
-  key="$1"
-  input_file="$2"
-
-  awk -v key="$key" '
-    $0 ~ "^" key ":" {
-      print NR
-      found = 1
-      exit
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  ' "$input_file"
-}
-
-find_section_body_end_line() {
-  key="$1"
-  input_file="$2"
-
-  awk -v key="$key" '
-    {
-      lines[NR] = $0
-    }
-    END {
-      key_line = 0
-      for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ "^" key ":") {
-          key_line = i
-          break
-        }
-      }
-
-      if (key_line == 0) {
-        exit 1
-      }
-
-      end_line = NR
-      for (i = key_line + 1; i <= NR; i++) {
-        if (lines[i] ~ "^[A-Za-z0-9_-]+:") {
-          end_line = i - 1
-          break
-        }
-      }
-
-      while (end_line > key_line && (lines[end_line] ~ /^#/ || lines[end_line] ~ /^$/)) {
-        end_line--
-      }
-
-      print end_line
-    }
-  ' "$input_file"
-}
-
-validate_preserved_tail() {
-  input_file="$1"
-
-  awk '
-    /^[A-Za-z0-9_-]+:/ {
-      key = $1
-      sub(/:$/, "", key)
-      keys[++count] = key
-    }
-    END {
-      if (count < 3) {
-        exit 1
-      }
-      if (keys[count - 2] != "water_table") {
-        exit 1
-      }
-      if (keys[count - 1] != "device_identity") {
-        exit 1
-      }
-      if (keys[count] != "modbus_sensors") {
-        exit 1
-      }
-    }
-  ' "$input_file"
-}
-
-append_preserved_section() {
-  key="$1"
-  local_file="$2"
-  remote_file="$3"
-  output_file="$4"
-  work_dir="$5"
-
-  local_start="$(find_section_start_line "$key" "$local_file")" || return 1
-  local_key_line="$(find_key_line "$key" "$local_file")" || return 1
-  local_end="$(find_section_body_end_line "$key" "$local_file")" || return 1
-  remote_start="$(find_section_start_line "$key" "$remote_file")" || return 1
-  remote_key_line="$(find_key_line "$key" "$remote_file")" || return 1
-
-  remote_leading="$work_dir/${key}.remote.leading"
-  local_leading="$work_dir/${key}.local.leading"
-
-  : > "$remote_leading"
-  : > "$local_leading"
-
-  if [ "$remote_start" -lt "$remote_key_line" ]; then
-    sed -n "${remote_start},$((remote_key_line - 1))p" "$remote_file" > "$remote_leading"
-    cat "$remote_leading" >> "$output_file"
-  fi
-
-  if [ "$local_start" -lt "$local_key_line" ]; then
-    sed -n "${local_start},$((local_key_line - 1))p" "$local_file" > "$local_leading"
-    if ! cmp -s "$remote_leading" "$local_leading"; then
-      cat "$local_leading" >> "$output_file"
-    fi
-  fi
-
-  sed -n "${local_key_line},${local_end}p" "$local_file" >> "$output_file"
-}
-
 merge_config() {
   current_file="$1"
   remote_file="$2"
@@ -195,39 +43,116 @@ merge_config() {
   tr -d '\r' < "$current_file" > "$current_norm"
   tr -d '\r' < "$remote_file" > "$remote_norm"
 
-  validate_preserved_tail "$current_norm" || {
-    echo "Urutan tail config lokal berubah. Expected tail: water_table -> device_identity -> modbus_sensors"
-    return 1
-  }
-  validate_preserved_tail "$remote_norm" || {
-    echo "Urutan tail config remote berubah. Expected tail: water_table -> device_identity -> modbus_sensors"
-    return 1
-  }
+  awk '
+    BEGIN {
+      preserve["water_table"] = 1
+      preserve["device_identity"] = 1
+      preserve["modbus_sensors"] = 1
+    }
 
-  remote_head_stop="$(find_section_start_line "water_table" "$remote_norm")" || {
-    echo "Gagal menemukan section water_table di $remote_file"
-    return 1
-  }
-  remote_head_end=$((remote_head_stop - 1))
+    function is_top_level_key(line) {
+      return line ~ /^[A-Za-z0-9_-]+:/
+    }
 
-  if [ "$remote_head_end" -gt 0 ]; then
-    sed -n "1,${remote_head_end}p" "$remote_norm" > "$merged_file"
-  else
-    : > "$merged_file"
-  fi
+    function key_name(line,    parts) {
+      split(line, parts, ":")
+      return parts[1]
+    }
 
-  append_preserved_section "water_table" "$current_norm" "$remote_norm" "$merged_file" "$work_dir" || {
-    echo "Gagal merge section water_table"
-    return 1
-  }
-  append_preserved_section "device_identity" "$current_norm" "$remote_norm" "$merged_file" "$work_dir" || {
-    echo "Gagal merge section device_identity"
-    return 1
-  }
-  append_preserved_section "modbus_sensors" "$current_norm" "$remote_norm" "$merged_file" "$work_dir" || {
-    echo "Gagal merge section modbus_sensors"
-    return 1
-  }
+    function is_comment_or_blank(line) {
+      return line ~ /^[[:space:]]*$/ || line ~ /^#/
+    }
+
+    function append_line(target, mode, key, text) {
+      if (target == "header") {
+        header[mode] = header[mode] text
+      } else if (target == "leading") {
+        leading[mode, key] = leading[mode, key] text
+      } else {
+        body[mode, key] = body[mode, key] text
+      }
+    }
+
+    function flush_pending(mode, current_key, target,    i) {
+      for (i = 1; i <= pending_count; i++) {
+        append_line(target, mode, current_key, pending[i])
+      }
+      pending_count = 0
+    }
+
+    function finish_file(mode) {
+      if (mode == "") {
+        return
+      }
+      if (current_key != "") {
+        flush_pending(mode, current_key, "leading")
+      } else {
+        flush_pending(mode, "", "header")
+      }
+    }
+
+    FNR == 1 {
+      finish_file(mode)
+      mode = (ARGIND == 1 ? "current" : "remote")
+      current_key = ""
+      pending_count = 0
+      key_count[mode] = 0
+    }
+
+    {
+      line = $0 ORS
+
+      if (is_top_level_key($0)) {
+        current_key = key_name($0)
+        order[mode, ++key_count[mode]] = current_key
+        flush_pending(mode, current_key, "leading")
+        append_line("body", mode, current_key, line)
+        next
+      }
+
+      if (is_comment_or_blank($0)) {
+        pending[++pending_count] = line
+        next
+      }
+
+      if (current_key == "") {
+        flush_pending(mode, "", "header")
+        append_line("header", mode, "", line)
+      } else {
+        flush_pending(mode, current_key, "body")
+        append_line("body", mode, current_key, line)
+      }
+    }
+
+    END {
+      finish_file(mode)
+
+      printf "%s", header["remote"]
+
+      for (i = 1; i <= key_count["remote"]; i++) {
+        key = order["remote", i]
+
+        if (preserve[key] && body["current", key] != "") {
+          printf "%s", leading["remote", key]
+          if (leading["current", key] != "" && leading["current", key] != leading["remote", key]) {
+            printf "%s", leading["current", key]
+          }
+          printf "%s", body["current", key]
+          emitted[key] = 1
+        } else {
+          printf "%s", leading["remote", key]
+          printf "%s", body["remote", key]
+        }
+      }
+
+      for (key in preserve) {
+        if (!emitted[key] && body["current", key] != "") {
+          printf "%s", leading["current", key]
+          printf "%s", body["current", key]
+        }
+      }
+    }
+  ' "$current_norm" "$remote_norm" > "$merged_file"
 }
 
 echo "Step 1: pindah ke $BASE_DIR"
@@ -256,20 +181,21 @@ chmod +x "$BASE_DIR/rut-datalogger" "$BASE_DIR/ui-rut-datalogger"
 echo "Siapkan ulang folder database"
 mkdir -p "$BASE_DIR/netra_db"
 
-echo "Step 6: update config-rut.yaml dari template GitHub"
-REMOTE_CONFIG="$TMP_DIR/config-rut.remote.yaml"
-MERGED_CONFIG="$TMP_DIR/config-rut.merged.yaml"
-CURRENT_CONFIG="$BASE_DIR/config-rut.yaml"
+echo "Step 6: skip update config-rut.yaml"
+# echo "Step 6: update config-rut.yaml dari template GitHub"
+# REMOTE_CONFIG="$TMP_DIR/config-rut.remote.yaml"
+# MERGED_CONFIG="$TMP_DIR/config-rut.merged.yaml"
+# CURRENT_CONFIG="$BASE_DIR/config-rut.yaml"
 
-uclient-fetch -O "$REMOTE_CONFIG" "$CONFIG_URL"
+# uclient-fetch -O "$REMOTE_CONFIG" "$CONFIG_URL"
 
-if [ -f "$CURRENT_CONFIG" ]; then
-  cp "$CURRENT_CONFIG" "$BASE_DIR/config-rut.yaml.bak.$TIMESTAMP"
-  merge_config "$CURRENT_CONFIG" "$REMOTE_CONFIG" "$MERGED_CONFIG" "$TMP_DIR"
-  cp "$MERGED_CONFIG" "$CURRENT_CONFIG"
-else
-  cp "$REMOTE_CONFIG" "$CURRENT_CONFIG"
-fi
+# if [ -f "$CURRENT_CONFIG" ]; then
+#   cp "$CURRENT_CONFIG" "$BASE_DIR/config-rut.yaml.bak.$TIMESTAMP"
+#   merge_config "$CURRENT_CONFIG" "$REMOTE_CONFIG" "$MERGED_CONFIG" "$TMP_DIR"
+#   cp "$MERGED_CONFIG" "$CURRENT_CONFIG"
+# else
+#   cp "$REMOTE_CONFIG" "$CURRENT_CONFIG"
+# fi
 
 echo "Step 7: restart service"
 /etc/init.d/rut-datalogger restart
