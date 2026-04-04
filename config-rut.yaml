@@ -1,0 +1,951 @@
+
+# -----------------------------------------------------------------------------
+# Router provisioning untuk RUT906
+# Diisi oleh script: apply-rut906-router-config-v3.sh
+# -----------------------------------------------------------------------------
+router:
+  enabled: true # kalau true, agent akan menjalankan provisioning router saat pre-start
+  # script_path: "build/apply-rut906-router-config.sh" # OPTIONAL override path script apply router
+  # apply_timeout_sec: 180
+
+  wifi:
+    ssid: "N-SENSE" # script akan menambahkan -<imei6>-<serial6>
+    password: "netra123"
+    encryption: "psk2"
+    disabled: false
+    radio: "radio0"
+    network: "lan"
+
+  lan:
+    ipaddr: "192.168.8.1"
+    netmask: "255.255.255.0"
+    proto: "static"
+    dhcp_start: "100"
+    dhcp_limit: "150"
+    dhcp_leasetime: "12h"
+
+  time:
+    # timezone router mengikuti top-level time.timezone
+    enabled: true
+    ntp_servers: ["0.id.pool.ntp.org", "1.id.pool.ntp.org", "2.id.pool.ntp.org"]
+
+  reboot_scheduler:
+    enabled: true
+    action: "1"
+    period: "week"
+    days: ["mon"]
+    times: ["03:00"]
+    force_last_day: false
+
+  access:
+    local_hostname: "netra.sense"
+    app_public_port: "80"
+    app_internal_port: "8080" # default diambil dari top-level listen bila kosong
+    webui_http_port: "8081"
+    webui_https_port: "8443"
+    webui_redirect_https: false
+
+  openvpn:
+    enabled: true
+    name: "openvpn-netra"
+    ovpn_dir: "/usr/local/mnt/sda1/"
+    archive_glob: "*-rut*.rar"
+    ovpn_file: ""
+    username: ""
+    password: ""
+
+  gpsd:
+    enabled: true
+
+  
+listen: ":8080"
+db_path: "/usr/local/mnt/sda1/netra_db/rutagent.db"
+# Path mount/storage untuk kalkulasi sisa disk (endpoint telemetry/storage).
+# Bisa dioverride via env: RUTAGENT_STORAGE_PATH.
+storage_path: "/usr/local/mnt/sda1"
+sample_interval_sec: 60
+telemetry_profile: "sinarmas_rs485_v1"
+# telemetry_profile = policy global payload/fleet.
+# Saat ini dipakai untuk memutuskan enrichment global seperti rain/network_rxtx.
+# collectors[].profile tetap dipakai untuk decoder/mapping per collector.
+telemetry_options:
+  include_raw: false
+  include_rain: true
+  include_network_rxtx: true
+
+debug: true
+http_api_key: "" # isi kalau mau endpoint sensitif wajib X-API-Key / ?api_key=
+
+# Collector config baru:
+# - kind memilih adapter infrastructure
+# - profile memilih mapping/usecase/policy
+#
+# Catatan transisi:
+# - modbus_sensors tetap menjadi registry sensor untuk collector modbus_rs485
+# - kalau collectors kosong, agent fallback ke perilaku lama: baca semua modbus_sensors
+collectors:
+  - name: "peat-water-rs485"
+    kind: "modbus_rs485"
+    profile: "water_level_v1"
+    enabled: true
+    modbus:
+      sensor_names: ["HPT606", "HRF600S", "RK330-01", "RK400-01", "epever", "ZILAI_LDFM01-2", "ZILAI_LDFM01"]
+
+  - name: "wintermar-engine"
+    kind: "udp_can_broadcast"
+    profile: "wintermar_engine_v1"
+    enabled: false
+    udp_can:
+      # Ikat listener ke VLAN ini agar source UDP CAN tetap datang dari port
+      # yang sama walau interface memakai DHCP / IP dinamis.
+      bind_interface: "eth0.20"
+      packet_format: "wintermar_broadcast_v1"
+      # Catalog dibangkitkan dari mapping PDF objnum -> pointid + sniff pcapng.
+      # Saat aktif, collector akan me-load semua signal yang sudah terobservasi
+      # beserta listen_addr/value_type/dtype masing-masing.
+      signal_catalog_path: "wintermar_signal_catalog.json"
+      use_signal_catalog: true
+      auto_listen_from_catalog: true
+      snapshot_window_ms: 1500
+      read_timeout_ms: 1000
+      max_frames: 512
+      # Opsional override/additional mapping lokal.
+      # Entry di bawah akan digabung setelah catalog, jadi bisa dipakai
+      # untuk rename telemetry_key atau memaksa datatype tertentu.
+      signals: []
+
+# Format Wintermar hasil sniff:
+# - header biner 32 byte
+# - `value_type=4/5/16` memakai body header + daftar record tetap
+# - `value_type=10` di capture memakai body 10 byte tanpa header count
+# - decoder sekarang sudah menampung tuple yang teramati di capture:
+#   vt4, vt5, vt10, vt16
+#
+# Listener lama juga masih menerima format legacy berikut:
+# 1. JSON object
+#    {"can_id":"0x0CF00400","data":"FFFFFFFF401F0000"}
+# 2. Multi-line text / CSV
+#    18FEEE00,5A00000000000000
+#    18FEF200,2003000000000000
+
+uplink:
+  mode: "gsm" # lan | gsm | starlink
+  primary_iface: "eth0.2"
+  fallback_iface: "usb0"
+  monitor_iface: ["usb0", "eth0.2"] # untuk mode GSM, biasanya modem muncul sebagai usb0; untuk mode Starlink, biasanya eth0.2 , "eth0.20", "eth0.30"
+  probe_timeout_ms: 1500
+  probe_targets:
+    - "8.8.8.8:53"
+    - "1.1.1.1:53"
+    - "9.9.9.9:53"
+  starlink:
+    enabled: true
+    relay_id: "relay0" # dipakai saat control_mode=ubus
+    control_mode: "ubus" # ubus | modbus_control
+    # modbus_control:
+    #   serial_device: "/dev/rs485"
+    #   baud: 9600
+    #   parity: "N"
+    #   stop_bits: 1
+    #   slave_id: 1
+    #   timeout_ms: 1200
+    #   write_kind: "coil" # coil | holding
+    #   write_addr: 0
+    #   on_value: 1
+    #   off_value: 0
+    #   read_kind: "coil" # OPTIONAL, default ikut write_kind
+    #   read_addr: 0 # OPTIONAL, default ikut write_addr
+    #   read_quantity: 1
+
+    warmup_sec: 3
+    on_duration_sec: 1200
+    cooldown_sec: 3
+    keep_on_when_fail: true
+
+    # Saat window ON: stop kirim sebelum window habis (margin safety)
+    send_loop_safety_margin_sec: 5
+
+    # NOTE: di versi main.go kamu, loop starlink utamanya align-by-interval.
+    # schedule_times tetap disimpan untuk masa depan, tapi saat ini interval yang dipakai.
+    send_policy:
+      mode: "interval" # interval | schedule
+      interval_sec: 10800 # 3 jam
+      start_time: "00:00" # OPTIONAL anchor HH:MM (mengikuti time.timezone). interval dihitung dari jam ini.
+      schedule_times:
+        ["00:00", "03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"]
+
+# INBOX: menerima data dari luar (HTTP POST &/atau MQTT subscribe) lalu disimpan ke DB.
+inbox:
+  http:
+    enabled: false
+    path: "/ingest"
+  mqtt:
+    enabled: true
+    broker: "mqtts://mqtt.netratech.co:8883"
+    # Base client_id (opsional): agent akan menambahkan suffix role + identitas device otomatis.
+    client_id: "rutagent-nsense"
+    username: "netra-sense"
+    password: "netra-sense-360"
+    topic_sub: "dev/v1/downlink/gateway/"
+    qos: 2
+    keepalive_sec: 30
+    ping_timeout_sec: 20
+    connect_timeout_sec: 30
+
+# OUTBOX: kirim data unsent (outbox DB) ke server.
+# Mode: http | mqtt | both
+outbox:
+  enabled: true
+  mode: "mqtt"
+
+  # ack timeout khusus MQTT (HTTP pakai timeout_sec)
+  ack_timeout_sec: 60
+
+  # 0 = tak dibatasi (berhenti oleh safety window starlink / outbox kosong)
+  max_send_per_run: 0
+
+  http:
+    enabled: false
+    ack: true
+    url: "https://nodered.netratech.id/ingest-rut"
+    timeout_sec: 25
+    headers:
+      X-Device: "rut906-siteA"
+    basic_auth:
+      username: "ingest"
+      password: "secret" # saranku: isi via provisioning, jangan commit
+
+  mqtt:
+    enabled: true
+    require_ack: true
+    broker: "mqtts://mqtt.netratech.co:8883"
+    client_id: "rutagent-nsense"
+    username: "netra-sense"
+    password: "netra-sense-360"
+    topic_pub: "dev/v1/uplink/devices/"
+    topic_ack: "dev/v1/ack/gateway/"
+    qos: 2
+    retain: false
+    keepalive_sec: 30
+    ping_timeout_sec: 20
+    connect_timeout_sec: 30
+
+# LEGACY (kompatibilitas): kalau config lama kamu masih pakai "upload:",
+# main.go akan memetakan upload -> outbox.http saat merge.
+# Boleh kamu hapus kalau tidak pernah dipakai.
+upload:
+  enabled: false
+  ack: true
+  url: ""
+  timeout_sec: 25
+  headers: {}
+  basic_auth: null
+
+# LOG: file .log dengan rotasi + retensi
+log:
+  enabled: true
+  dir: "/usr/local/mnt/sda1/rutagent_logs"
+  prefix: "rutagent"
+  max_size_mb: 10
+  max_backups: 10
+  max_age_days: 14
+  rotate_daily: true
+  also_stdout: false
+
+# Service control (optional)
+# Endpoint akan mengeksekusi command di bawah (hanya jika enabled=true).
+service_control:
+  enabled: false
+  restart_cmd: ["/etc/init.d/rutagent", "restart"]
+  stop_cmd: ["/etc/init.d/rutagent", "stop"]
+  status_cmd: ["/etc/init.d/rutagent", "status"]
+
+# AUTH + session cookie (optional).
+# Kalau auth.enabled=false dan http_api_key kosong, semua endpoint akan kebuka tanpa auth.
+auth:
+  enabled: false
+  session:
+    cookie_name: "rutagent_sid"
+    ttl_seconds: 86400
+    secure_cookie: false
+  users:
+    # Kalau kamu isi password_plain, main.go akan auto-konversi menjadi password_hash+salt lalu menulis balik YAML.
+    # - username: "admin"
+    #   password_plain: "admin123"
+    #   password_hash: ""
+    #   salt: ""
+
+# TIME: hanya untuk info/status; sync/status bisa dihubungkan ke command di router kalau kamu mau.
+time:
+  timezone: "Asia/Jakarta"
+  # Prioritas: pakai command yang memang berlaku di device kamu.
+  sync_cmd: ["/etc/init.d/sysntpd", "restart"]
+  # status_cmd: ["sh","-lc","chronyc tracking"]
+  auto_sync_enabled: true
+  auto_sync_interval_sec: 900
+  auto_sync_timeout_sec: 20
+
+# RETENTION: target ukuran DB setelah proses retention/compact (best-effort).
+retention:
+  keep_data_gb: 25
+  compact_sent_after_days: 360
+  compact_batch_size: 500
+
+# UBUS calls (opsional). Kalau kosong, pakai default bawaan.
+ubus_calls:
+  - key: "mnfinfo"
+    object: "mnfinfo"
+    method: "get"
+    args: {}
+
+  - key: "system_board"
+    object: "system"
+    method: "board"
+    args: {}
+
+  - key: "system_info"
+    object: "system"
+    method: "info"
+    args: {}
+
+  - key: "net_lan"
+    object: "network.interface.lan"
+    method: "status"
+    args: {}
+
+  - key: "net_wan"
+    object: "network.interface.wan"
+    method: "status"
+    args: {}
+
+  - key: "net_mob1s1a1"
+    object: "network.interface.mob1s1a1"
+    method: "status"
+    args: {}
+
+  - key: "net_mob1s2a1"
+    object: "network.interface.mob1s2a1"
+    method: "status"
+    args: {}
+
+  - key: "dev_eth0_1"
+    object: "network.device"
+    method: "status"
+    args:
+      name: "eth0.1"
+
+  - key: "dev_eth0_2"
+    object: "network.device"
+    method: "status"
+    args:
+      name: "eth0.2"
+
+  - key: "wifi_wlan0_info"
+    object: "iwinfo"
+    method: "info"
+    args:
+      device: "wlan0"
+
+  - key: "gsm_id_info"
+    object: "gsm.modem0"
+    method: "get_id_info"
+    args: {}
+
+  - key: "gsm_iccid"
+    object: "gsm.modem0"
+    method: "get_iccid"
+    args: {}
+
+  - key: "gsm_network_info"
+    object: "gsm.modem0"
+    method: "get_network_info"
+    args: {}
+
+  - key: "gsm_serving_cell"
+    object: "gsm.modem0"
+    method: "get_serving_cell"
+    args: {}
+
+  - key: "gsm_signal"
+    object: "gsm.modem0"
+    method: "get_signal_query"
+    args: {}
+
+
+
+# Hitung parameter turunan water_table:
+# B = CL - WC - A, dengan WC diambil dari telemetry_key (WC_source_key)
+water_table:
+  enabled: true
+  CL: 300.0
+  A: 91.5
+  WC_source_key: "water_level"
+  telemetry_key: "water_table"
+
+
+device_identity:
+  enabled: true
+  refresh_sec: 600 # ambil imei/serial ulang tiap 10 menit
+  inject_sources: ["telemetry"] # atau ["*"] kalau mau semua record outbox (inbox juga)
+  imei_key: "ident"
+  serial_key: "device_serial"
+  site_name: "Bintaro Jaya"
+  site_id: "JAYA-MENTENG-01"
+  device_name: "NSENSE-JAYA-MENTENG-01"
+  project: "Flow Monitoring"
+  region: "Banten - Tangerang Selatan"
+  note: "Dipasang didepan Bukit Menteng"
+  
+modbus_sensors:
+  - name: "HRF600S"
+    serial_device: "/dev/rs485"
+    baud: 9600
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:128"
+    timeout_ms: 800
+    reads:
+      # 0x0001 Flow velocity, unit m/s, raw / 1000
+      - key: "flow_velocity"
+        telemetry_key: "flow_velocity_ms"
+        kind: "input"
+        addr: "0x0001"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.001
+        offset: 0
+
+      # 0x0002 Water level, unit m, raw / 1000
+      - key: "water_level"
+        telemetry_key: "water_level_m"
+        kind: "input"
+        addr: "0x0002"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.001
+        offset: 0
+
+      # 0x0003 Empty height, unit m, raw / 1000
+      - key: "empty_height"
+        telemetry_key: "empty_height_m"
+        kind: "input"
+        addr: "0x0003"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.001
+        offset: 0
+
+      # 0x0004 Instantaneous flow, unit m3/s, raw / 1000
+      - key: "instantaneous_flow"
+        telemetry_key: "instantaneous_flow_m3s"
+        kind: "input"
+        addr: "0x0004"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.001
+        offset: 0
+
+      # 0x0005..0x0007 Cumulative flow
+      # Manual bilang ini gabungan 3 register 16-bit.
+      # Paling aman dibaca per-part dulu kalau parser belum support uint48.
+      - key: "cumulative_flow_hi"
+        telemetry_key: "cumulative_flow_hi_raw"
+        kind: "input"
+        addr: "0x0005"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "cumulative_flow_mid"
+        telemetry_key: "cumulative_flow_mid_raw"
+        kind: "input"
+        addr: "0x0006"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "cumulative_flow_lo"
+        telemetry_key: "cumulative_flow_lo_raw"
+        kind: "input"
+        addr: "0x0007"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # 0x0008 Flow rate signal strength
+      - key: "flow_signal_strength"
+        telemetry_key: "flow_signal_strength"
+        kind: "input"
+        addr: "0x0008"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # 0x0009 Water level signal strength
+      - key: "water_level_signal_strength"
+        telemetry_key: "water_level_signal_strength"
+        kind: "input"
+        addr: "0x0009"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # 0x000A Flow direction: Reverse=0, Forward=1
+      - key: "flow_direction"
+        telemetry_key: "flow_direction"
+        kind: "input"
+        addr: "0x000A"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # 0x0021 Accident details
+      - key: "accident_details"
+        telemetry_key: "accident_details"
+        kind: "input"
+        addr: "0x0021"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # 0x0022 Vertical angle, enlarged 100 times => raw / 100
+      - key: "vertical_angle"
+        telemetry_key: "vertical_angle_deg"
+        kind: "input"
+        addr: "0x0022"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.01
+        offset: 0
+
+      # 0x0023 Input voltage, enlarged 10 times => raw / 10
+      - key: "input_voltage"
+        telemetry_key: "input_voltage_v"
+        kind: "input"
+        addr: "0x0023"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.1
+        offset: 0
+
+  - name: "epever"
+    serial_device: "/dev/rs485"
+    baud: 115200
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:1"
+    timeout_ms: 1500
+    reads:
+      # PV array input voltage -> solar_voltage_v (V) : raw * 0.01
+      - key: "pv_array_input_voltage"
+        telemetry_key: "solar_voltage_v"
+        kind: "input"
+        addr: "0x3100"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.01
+        offset: 0
+
+      # PV array input current -> solar_current_ma (mA)
+      # raw * 0.01 A => mA = raw * 0.01 * 1000 = raw * 10
+      - key: "pv_array_input_current"
+        telemetry_key: "solar_current_ma"
+        kind: "input"
+        addr: "0x3101"
+        quantity: 1
+        datatype: "uint16"
+        scale: 10
+        offset: 0
+
+      # PV array power (32-bit). Banyak device pakai word-swap.
+      # Jika hasil aneh, coba ganti datatype: uint32be <-> uint32ws
+      - key: "pv_array_power_w"
+        kind: "input"
+        addr: "0x3102"
+        quantity: 2
+        datatype: "uint32ws"
+        scale: 0.01
+        offset: 0
+
+      # Battery temperature (C) : raw * 0.01
+      - key: "battery_temperature"
+        telemetry_key: "battery_temperature"
+        kind: "input"
+        addr: "0x3110"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.01
+        offset: 0
+
+      # Device temperature -> controller_temp_c (C)
+      - key: "device_temperature"
+        telemetry_key: "controller_temp_c"
+        kind: "input"
+        addr: "0x3111"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.01
+        offset: 0
+
+      # Battery SOC -> battery_percent (%)
+      - key: "battery_soc"
+        telemetry_key: "battery_soc"
+        kind: "input"
+        addr: "0x311A"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      # Battery voltage -> battery_voltage_v (V) : raw * 0.01
+      - key: "battery_voltage"
+        telemetry_key: "battery_voltage_v"
+        kind: "input"
+        addr: "0x331A"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.01
+        offset: 0
+
+      # Battery current (32-bit). Jika nilainya janggal, coba uint32be atau int32ws.
+      - key: "battery_current"
+        telemetry_key: "battery_current"
+        kind: "input"
+        addr: "0x331B"
+        quantity: 2
+        datatype: "int32ws"
+        scale: 0.01
+        offset: 0
+
+      # Status bitfield (raw saja)
+      - key: "battery_status"
+        telemetry_key: "battery_status"
+        kind: "input"
+        addr: "0x3200"
+        quantity: 1
+        datatype: "uint16"
+
+      - key: "charging_equipment_status"
+        telemetry_key: "charging_equipment_status"
+        kind: "input"
+        addr: "0x3201"
+        quantity: 1
+        datatype: "uint16"
+        scale: 0.01
+        offset: 0
+
+  - name: "ZILAI_LDFM01"
+    serial_device: "/dev/rs485"
+    baud: 115200
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:101"
+    timeout_ms: 1500
+    reads:
+      # ZILAI flow meter realtime map memakai HOLDING register / FC03.
+      # Telemetry key diprefix zilai_ supaya tidak bentrok dengan HPT606.
+      - key: "air_height"
+        telemetry_key: "zilai_air_height_mm"
+        kind: "holding"
+        addr: "0x0001"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "zilai_water_level"
+        telemetry_key: "zilai_water_level_mm"
+        kind: "holding"
+        addr: "0x0003"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "ranging_signal_strength"
+        telemetry_key: "zilai_level_signal_strength"
+        kind: "holding"
+        addr: "0x0004"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "mounting_height"
+        telemetry_key: "zilai_mounting_height_cm"
+        kind: "holding"
+        addr: "0x0005"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "roll_angle"
+        telemetry_key: "zilai_roll_angle_deg"
+        kind: "holding"
+        addr: "0x0009"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.1
+        offset: 0
+
+      - key: "pitch_angle"
+        telemetry_key: "zilai_pitch_angle_deg"
+        kind: "holding"
+        addr: "0x000A"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.1
+        offset: 0
+
+      - key: "zilai_flow_direction"
+        telemetry_key: "zilai_flow_direction_raw"
+        kind: "holding"
+        addr: "0x000C"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "surface_flow_velocity"
+        telemetry_key: "zilai_surface_flow_velocity_ms"
+        kind: "holding"
+        addr: "0x000F"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "instantaneous_flow_rate"
+        telemetry_key: "zilai_instantaneous_flow_m3s"
+        kind: "holding"
+        addr: "0x0011"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "positive_cumulative_flow"
+        telemetry_key: "zilai_positive_cumulative_m3"
+        kind: "holding"
+        addr: "0x0013"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "negative_cumulative_flow"
+        telemetry_key: "zilai_negative_cumulative_m3"
+        kind: "holding"
+        addr: "0x0015"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "overwater_area"
+        telemetry_key: "zilai_overwater_area_m2"
+        kind: "holding"
+        addr: "0x0017"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "silt_thickness"
+        telemetry_key: "zilai_silt_thickness_mm"
+        kind: "holding"
+        addr: "0x0019"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "filtered_speed_value"
+        telemetry_key: "zilai_filtered_speed_value_ms"
+        kind: "holding"
+        addr: "0x01F4"
+        quantity: 2
+        datatype: "int32be"
+        scale: 0.001
+        offset: 0
+
+      - key: "raw_speed_value"
+        telemetry_key: "zilai_raw_speed_value_ms"
+        kind: "holding"
+        addr: "0x01F6"
+        quantity: 2
+        datatype: "int32be"
+        scale: 0.001
+        offset: 0
+
+      - key: "speed_signal_strength"
+        telemetry_key: "zilai_speed_signal_strength"
+        kind: "holding"
+        addr: "0x01F9"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+
+  - name: "ZILAI_LDFM01-2"
+    serial_device: "/dev/rs485"
+    baud: 115200
+    parity: "N"
+    stop_bits: 1
+    slave_id: "d:102"
+    timeout_ms: 1500
+    reads:
+      # ZILAI flow meter realtime map memakai HOLDING register / FC03.
+      # Slave 102 dipisah dengan suffix/prefix khusus agar tidak bentrok dengan slave 101.
+      - key: "air_height_102"
+        telemetry_key: "zilai_102_air_height_mm"
+        kind: "holding"
+        addr: "0x0001"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "water_level_102"
+        telemetry_key: "zilai_102_water_level_mm"
+        kind: "holding"
+        addr: "0x0003"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "ranging_signal_strength_102"
+        telemetry_key: "zilai_102_level_signal_strength"
+        kind: "holding"
+        addr: "0x0004"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "mounting_height_102"
+        telemetry_key: "zilai_102_mounting_height_cm"
+        kind: "holding"
+        addr: "0x0005"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "roll_angle_102"
+        telemetry_key: "zilai_102_roll_angle_deg"
+        kind: "holding"
+        addr: "0x0009"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.1
+        offset: 0
+
+      - key: "pitch_angle_102"
+        telemetry_key: "zilai_102_pitch_angle_deg"
+        kind: "holding"
+        addr: "0x000A"
+        quantity: 1
+        datatype: "int16"
+        scale: 0.1
+        offset: 0
+
+      - key: "flow_direction_102"
+        telemetry_key: "zilai_102_flow_direction_raw"
+        kind: "holding"
+        addr: "0x000C"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
+
+      - key: "surface_flow_velocity_102"
+        telemetry_key: "zilai_102_surface_flow_velocity_ms"
+        kind: "holding"
+        addr: "0x000F"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "instantaneous_flow_rate_102"
+        telemetry_key: "zilai_102_instantaneous_flow_m3s"
+        kind: "holding"
+        addr: "0x0011"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "positive_cumulative_flow_102"
+        telemetry_key: "zilai_102_positive_cumulative_m3"
+        kind: "holding"
+        addr: "0x0013"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "negative_cumulative_flow_102"
+        telemetry_key: "zilai_102_negative_cumulative_m3"
+        kind: "holding"
+        addr: "0x0015"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "overwater_area_102"
+        telemetry_key: "zilai_102_overwater_area_m2"
+        kind: "holding"
+        addr: "0x0017"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "silt_thickness_102"
+        telemetry_key: "zilai_102_silt_thickness_mm"
+        kind: "holding"
+        addr: "0x0019"
+        quantity: 2
+        datatype: "float32_dcba"
+        scale: 1
+        offset: 0
+
+      - key: "filtered_speed_value_102"
+        telemetry_key: "zilai_102_filtered_speed_value_ms"
+        kind: "holding"
+        addr: "0x01F4"
+        quantity: 2
+        datatype: "int32be"
+        scale: 0.001
+        offset: 0
+
+      - key: "raw_speed_value_102"
+        telemetry_key: "zilai_102_raw_speed_value_ms"
+        kind: "holding"
+        addr: "0x01F6"
+        quantity: 2
+        datatype: "int32be"
+        scale: 0.001
+        offset: 0
+
+      - key: "speed_signal_strength_102"
+        telemetry_key: "zilai_102_speed_signal_strength"
+        kind: "holding"
+        addr: "0x01F9"
+        quantity: 1
+        datatype: "uint16"
+        scale: 1
+        offset: 0
